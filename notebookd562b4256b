@@ -2,12 +2,8 @@
 # It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
 # For example, here's several helpful packages to load
 
-import numpy as np
-import pandas as pd
-#圖形繪畫
-import matplotlib.pyplot as plt
-#資料視覺化
-import seaborn as sns
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
 # Input data files are available in the read-only "../input/" directory
 # For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
@@ -20,60 +16,51 @@ for dirname, _, filenames in os.walk('/kaggle/input'):
 # You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
 # You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session
 
-train=pd.read_csv('../input/jane-street-market-prediction/train.csv')
-example_test=pd.read_csv('../input/jane-street-market-prediction/example_test.csv')
-features=pd.read_csv('../input/jane-street-market-prediction/features.csv')
-submission=pd.read_csv('../input/jane-street-market-prediction/example_sample_submission.csv')
-print('train:',train.shape)
-print('example_test:',example_test.shape)
-print('features:',features.shape)
-print('submission:',submission.shape)
+#Importing the library
+import lightgbm as lgb
+import warnings
+warnings.filterwarnings("ignore")
 
-#Missing Values
-missing_values_count = train.isnull().sum()
-print (missing_values_count)
-total_missing = missing_values_count.sum()
-print ("total_missing:",(total_missing))
-#去權重0(篩資料)
-train = train[train['weight'] != 0]
+%%time
+train = pd.read_csv('../input/jane-street-market-prediction/train.csv')
+train = train.astype({c: np.float32 for c in train.select_dtypes(include='float64').columns}) #limit memory use
 
-#空值確定補0
-np.isnan(train).any()
-train.fillna(value=0 , inplace=True)
-np.isnan(example_test).any()
-example_test.fillna(value=0 , inplace=True)
+#We don't want weight=0 datas
+train = train.query('weight > 0').reset_index(drop = True)
+train.head(10)
 
-#計算列的相關性，不包括空值;皮爾遜積差
-#train.corr().feature_0.sort_values(ascending=False)
-plt.figure(figsize=(11,7))
-sns.heatmap(train.corr())
-plt.show()
+#Filling the nan values
+f_mean = train.mean()
+train.fillna(f_mean, inplace=True)
 
-source_X=train[:2390491]
-source_y=train.loc[:2390491,'feature_0']
-pred_X=example_test[0:]
+#For generating 0 or 1 on the basis of resp features(which are returns from the market)
+train['action'] =  ( ((train['resp_1'] > 0 ) | (train['resp_2'] > 0 ) | (train['resp_3'] > 0 ) | (train['resp_4'] > 0 )) & (train['resp'] > 0 ) ).astype('int')
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-scaler=StandardScaler()
-source_X_scaler=scaler.fit_transform(source_X)
-pred_X_scaler=scaler.fit_transform(pred_X)
+x_train = train.loc[:, train.columns
 
-train_X,test_X,train_y,test_y=train_test_split(source_X_scaler,source_y,test_size=15219)
-print('train_feature：',train_X.shape)
-print('test_feature：',test_X.shape)
-print('train_label：',train_y.shape)
-print('test_label：',test_y.shape)
+y_train.head(10)
 
-from sklearn.svm import SVC
-svm = SVC(kernel='linear', max_iter=200)
-svm.fit(train_X,train_y)
+#Hypertuned Model
+clf = lgb.LGBMClassifier(boosting_type='gbdt', num_leaves=124, 
+                         max_depth=- 1, learning_rate=0.07, n_estimators=150, 
+                         subsample_for_bin=200000, objective='binary', metric='auc', 
+                         min_split_gain=0.5, min_child_weight=1, min_child_samples=5, 
+                         subsample=0.7, subsample_freq=1, colsample_bytree=0.75, 
+                         reg_alpha=1.2, reg_lambda=1.2, random_state=42, n_jobs=- 1, 
+                         silent=True, importance_type='split')
+                         
+%time clf.fit(x_train, y_train)
 
-result = svm.predict(test_X)[0:15219]
-result
-result.shape
-result=result.astype(int)
-resultDf=pd.DataFrame({'ts_id':np.arange(15219),'action':result})
+from tqdm import tqdm
+import janestreet
+env = janestreet.make_env() # initialize the environment
+iter_test = env.iter_test() # an iterator which loops over the test set
 
-resultDf.replace(-1,0,inplace=True)
-resultDf.to_csv('submission.csv',index=False)
+for (test_df, pred_df) in tqdm(iter_test):
+    if test_df['weight'].item() > 0:
+        X_test = test_df.loc[:, test_df.columns.str.contains('feature')]
+        y_preds = clf.predict(X_test)
+        pred_df.action = y_preds
+    else:
+        pred_df.action = 0
+    env.predict(pred_df)
