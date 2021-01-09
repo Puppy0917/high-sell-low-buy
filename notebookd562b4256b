@@ -1,0 +1,79 @@
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load
+
+import numpy as np
+import pandas as pd
+#圖形繪畫
+import matplotlib.pyplot as plt
+#資料視覺化
+import seaborn as sns
+
+# Input data files are available in the read-only "../input/" directory
+# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+# You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
+# You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session
+
+train=pd.read_csv('../input/jane-street-market-prediction/train.csv')
+example_test=pd.read_csv('../input/jane-street-market-prediction/example_test.csv')
+features=pd.read_csv('../input/jane-street-market-prediction/features.csv')
+submission=pd.read_csv('../input/jane-street-market-prediction/example_sample_submission.csv')
+print('train:',train.shape)
+print('example_test:',example_test.shape)
+print('features:',features.shape)
+print('submission:',submission.shape)
+
+#Missing Values
+missing_values_count = train.isnull().sum()
+print (missing_values_count)
+total_missing = missing_values_count.sum()
+print ("total_missing:",(total_missing))
+#去權重0(篩資料)
+train = train[train['weight'] != 0]
+
+#空值確定補0
+np.isnan(train).any()
+train.fillna(value=0 , inplace=True)
+np.isnan(example_test).any()
+example_test.fillna(value=0 , inplace=True)
+
+#計算列的相關性，不包括空值;皮爾遜積差
+#train.corr().feature_0.sort_values(ascending=False)
+plt.figure(figsize=(11,7))
+sns.heatmap(train.corr())
+plt.show()
+
+source_X=train[:2390491]
+source_y=train.loc[:2390491,'feature_0']
+pred_X=example_test[0:]
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+scaler=StandardScaler()
+source_X_scaler=scaler.fit_transform(source_X)
+pred_X_scaler=scaler.fit_transform(pred_X)
+
+train_X,test_X,train_y,test_y=train_test_split(source_X_scaler,source_y,test_size=15219)
+print('train_feature：',train_X.shape)
+print('test_feature：',test_X.shape)
+print('train_label：',train_y.shape)
+print('test_label：',test_y.shape)
+
+from sklearn.svm import SVC
+svm = SVC(kernel='linear', max_iter=200)
+svm.fit(train_X,train_y)
+
+result = svm.predict(test_X)[0:15219]
+result
+result.shape
+result=result.astype(int)
+resultDf=pd.DataFrame({'ts_id':np.arange(15219),'action':result})
+
+resultDf.replace(-1,0,inplace=True)
+resultDf.to_csv('submission.csv',index=False)
